@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from .config import get_settings
 from .database import create_tables
-from .routers import candidates, jobs
+from .routers import candidates, jobs, hackathon
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,6 +49,7 @@ app.add_middleware(
 
 app.include_router(candidates.router)
 app.include_router(jobs.router)
+app.include_router(hackathon.router)
 
 
 @app.get("/health")
