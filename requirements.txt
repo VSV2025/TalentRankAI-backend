@@ -1,0 +1,34 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+sqlalchemy>=2.0.29
+pydantic>=2.6.4
+pydantic-settings>=2.2.1
+python-dotenv>=1.0.1
+httpx>=0.27.0
+aiofiles>=23.2.1
+
+# Resume parsing
+PyMuPDF>=1.24.1
+python-docx>=1.1.0
+
+# Email verification
+dnspython>=2.6.1
+
+# Fuzzy matching for consistency check
+rapidfuzz>=3.9.1
+
+# ML / embeddings / scoring
+scikit-learn>=1.4.2
+numpy>=1.26.4
+scipy>=1.13.0
+
+# Graph enrichment
+networkx>=3.3
+
+# Learning-to-Rank
+lightgbm>=4.5.0
+
+# LLM orchestration (multi-agent debate)
+langgraph>=0.2.0
+openai>=1.0.0
