@@ -23,6 +23,10 @@ scikit-learn>=1.4.2
 numpy>=1.26.4
 scipy>=1.13.0
 
+# Vector retrieval (Layer 2) — these are used in embedding.py
+sentence-transformers>=2.7.0
+qdrant-client>=1.9.0
+
 # Graph enrichment
 networkx>=3.3
 

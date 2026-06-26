@@ -1,110 +1,100 @@
 """
 Layer 6 — Multi-agent debate using LangGraph.
 Three agents: ProAdvocate, Skeptic, Adjudicator.
-Only runs for borderline candidates (score 65-85).
-Uses Groq's OpenAI-compatible API. Falls back to static template if Groq is unavailable.
+Only runs for borderline candidates (score 62-88).
+Rate limiting and retries handled by llm_client.
+Falls back to static template only if Groq is completely unreachable.
 """
 import json
 import logging
 import re
-import time
 from typing import Optional, TypedDict
+
+from .llm_client import call_groq
 
 logger = logging.getLogger(__name__)
 
-PRO_PROMPT = """You are a Pro-Advocate agent arguing FOR hiring this candidate.
-Your goal: make the strongest case for why this person should advance.
-Cite specific resume evidence. Be compelling but honest.
-Keep it to 2-3 sentences.
+PRO_PROMPT = """You are a Pro-Advocate arguing FOR advancing this candidate.
+Make the strongest honest case. Cite 2-3 specific resume facts as evidence.
+Be concise — 2-3 sentences maximum.
 
-Candidate: {name}
-Title: {title}
-Skills: {skills}
-Overall score: {score}
+Candidate: {name} | Title: {title} | Score: {score}
 Key strengths: {highlights}
+Skills: {skills}
 Resume excerpt: {resume_excerpt}
 
-Argue for this candidate advancing. Cite specific evidence."""
+Argue for advancing. Cite specific evidence."""
 
-SKEPTIC_PROMPT = """You are a Skeptic agent arguing AGAINST hiring this candidate.
-Your goal: identify genuine risks, gaps, or concerns with this hire.
-Be critical but fair — focus on real gaps, not hypotheticals.
-Keep it to 2-3 sentences.
+SKEPTIC_PROMPT = """You are a Skeptic identifying genuine risks in hiring this candidate.
+Focus on real gaps vs the hard requirements. Be specific, not hypothetical.
+Be concise — 2-3 sentences maximum.
 
-Candidate: {name}
-Title: {title}
+Candidate: {name} | Title: {title} | Score: {score}
+Hard requirements: {hard_requirements}
 Skills: {skills}
-Overall score: {score}
-Role requirements (hard): {hard_requirements}
 Resume excerpt: {resume_excerpt}
 
 Identify the key risks or gaps. Be specific."""
 
-ADJUDICATOR_PROMPT = """You are an Adjudicator reviewing a debate about a borderline candidate.
+ADJUDICATOR_PROMPT = """You are an Adjudicator reviewing a Pro vs Skeptic debate about a borderline candidate.
 
 Pro argument: {pro}
 Skeptic argument: {skeptic}
+Initial score: {score}
 
-Candidate score: {score}
+Weigh both arguments. Produce:
+- adjusted_score: a precise decimal (e.g. 74.3) that is DIFFERENT from the initial score if the debate revealed new information
+- verdict: one sentence explaining your decision
 
-Provide a final adjusted score (0-100) and one sentence verdict.
-Return only JSON: {{"adjusted_score": 75, "verdict": "one sentence"}}"""
-
-
-def _call_llm_sync(
-    prompt: str,
-    model: str,
-    api_key: str,
-    base_url: str = "https://api.groq.com/openai/v1",
-    max_tokens: int = 400,
-    max_retries: int = 3,
-) -> Optional[str]:
-    """Call Groq via OpenAI-compatible client with retry-on-429."""
-    try:
-        from openai import OpenAI, RateLimitError
-    except ImportError:
-        logger.error("openai package not installed")
-        return None
-
-    client = OpenAI(api_key=api_key, base_url=base_url)
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            resp = client.chat.completions.create(
-                model=model,
-                max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return resp.choices[0].message.content if resp.choices else None
-
-        except RateLimitError:
-            wait = 2 ** attempt
-            if attempt == max_retries:
-                logger.error(f"Debate: rate limit on {model} — retries exhausted")
-                return None
-            logger.warning(f"Debate: Groq rate limit (429) — retry {attempt}/{max_retries} in {wait}s")
-            time.sleep(wait)
-
-        except Exception as e:
-            logger.error(f"Debate LLM call failed: {e}")
-            return None
-
-    return None
+Return ONLY JSON: {{"adjusted_score": <decimal>, "verdict": "<one sentence>"}}"""
 
 
 def _parse_json(text: Optional[str]) -> Optional[dict]:
     if not text:
         return None
-    text = re.sub(r"```(?:json)?\n?", "", text).strip().rstrip("`")
+    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`").strip()
     try:
-        return json.loads(text)
+        return json.loads(cleaned)
     except Exception:
-        m = re.search(r"\{[\s\S]+\}", text)
-        if m:
+        pass
+    # Bracket-match scan: try each '{' (rightmost-first), extract just the balanced
+    # object, parse it — handles JSON followed by analysis text.
+    positions = [i for i, ch in enumerate(cleaned) if ch == "{"]
+    for start in reversed(positions):
+        candidate = _bracket_extract(cleaned, start)
+        if candidate:
             try:
-                return json.loads(m.group(0))
+                obj = json.loads(candidate)
+                if isinstance(obj, dict):
+                    return obj
             except Exception:
-                pass
+                continue
+    return None
+
+
+def _bracket_extract(text: str, start: int) -> Optional[str]:
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if in_str:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
     return None
 
 
@@ -116,11 +106,11 @@ def run_debate_with_langgraph(
     model: str,
     base_url: str = "https://api.groq.com/openai/v1",
 ) -> dict:
-    """Run the 3-agent LangGraph debate. Falls back to direct calls if LangGraph unavailable."""
+    """Run the 3-agent LangGraph debate; falls back to direct calls if LangGraph unavailable."""
     try:
         return _run_langgraph_debate(candidate, score, requirements, api_key, model, base_url)
     except ImportError:
-        logger.info("LangGraph not available — running direct 3-agent debate")
+        logger.info("[L6] LangGraph not available — running direct 3-agent debate")
         return _run_direct_debate(candidate, score, requirements, api_key, model, base_url)
 
 
@@ -132,7 +122,6 @@ def _run_langgraph_debate(
     model: str,
     base_url: str,
 ) -> dict:
-    """Stateful LangGraph debate graph."""
     from langgraph.graph import StateGraph, END
 
     class DebateState(TypedDict):
@@ -140,70 +129,72 @@ def _run_langgraph_debate(
         score: float
         requirements: dict
         base_url: str
+        model: str
+        api_key: str
         pro_argument: str
         skeptic_argument: str
         adjusted_score: float
         verdict: str
 
-    def pro_node(state: DebateState) -> DebateState:
+    def _pro(state: DebateState) -> DebateState:
         cand = state["candidate"]
         prompt = PRO_PROMPT.format(
             name=cand.get("name", ""),
             title=cand.get("title", ""),
-            skills=", ".join((cand.get("skills") or [])[:15]),
             score=state["score"],
             highlights=", ".join((cand.get("highlights") or [])[:3]),
+            skills=", ".join((cand.get("skills") or [])[:15]),
             resume_excerpt=(cand.get("resume_text") or "")[:800],
         )
-        result = _call_llm_sync(prompt, model, api_key, base_url=state["base_url"])
-        return {**state, "pro_argument": result or "Strong technical background warrants consideration."}
+        text = call_groq(prompt, state["model"], state["api_key"], base_url=state["base_url"], max_tokens=300)
+        return {**state, "pro_argument": text or "Strong technical background warrants consideration."}
 
-    def skeptic_node(state: DebateState) -> DebateState:
+    def _skeptic(state: DebateState) -> DebateState:
         cand = state["candidate"]
         prompt = SKEPTIC_PROMPT.format(
             name=cand.get("name", ""),
             title=cand.get("title", ""),
-            skills=", ".join((cand.get("skills") or [])[:15]),
             score=state["score"],
             hard_requirements=", ".join((state["requirements"].get("hard_requirements") or [])[:5]),
+            skills=", ".join((cand.get("skills") or [])[:15]),
             resume_excerpt=(cand.get("resume_text") or "")[:800],
         )
-        result = _call_llm_sync(prompt, model, api_key, base_url=state["base_url"])
-        return {**state, "skeptic_argument": result or "Skill gaps present risk for this role."}
+        text = call_groq(prompt, state["model"], state["api_key"], base_url=state["base_url"], max_tokens=300)
+        return {**state, "skeptic_argument": text or "Skill gaps present risk for this role."}
 
-    def adjudicator_node(state: DebateState) -> DebateState:
+    def _adjudicator(state: DebateState) -> DebateState:
         prompt = ADJUDICATOR_PROMPT.format(
             pro=state.get("pro_argument", ""),
             skeptic=state.get("skeptic_argument", ""),
             score=state["score"],
         )
-        result = _call_llm_sync(prompt, model, api_key, base_url=state["base_url"], max_tokens=200)
-        parsed = _parse_json(result)
-        adj_score = float(parsed.get("adjusted_score", state["score"])) if parsed else state["score"]
+        text = call_groq(prompt, state["model"], state["api_key"], base_url=state["base_url"], max_tokens=200)
+        parsed = _parse_json(text)
+        adj = float(parsed.get("adjusted_score", state["score"])) if parsed else state["score"]
         verdict = parsed.get("verdict", "") if parsed else ""
-        return {**state, "adjusted_score": adj_score, "verdict": verdict}
+        return {**state, "adjusted_score": adj, "verdict": verdict}
 
     graph = StateGraph(DebateState)
-    graph.add_node("pro", pro_node)
-    graph.add_node("skeptic", skeptic_node)
-    graph.add_node("adjudicator", adjudicator_node)
+    graph.add_node("pro", _pro)
+    graph.add_node("skeptic", _skeptic)
+    graph.add_node("adjudicator", _adjudicator)
     graph.set_entry_point("pro")
     graph.add_edge("pro", "skeptic")
     graph.add_edge("skeptic", "adjudicator")
     graph.add_edge("adjudicator", END)
 
-    compiled = graph.compile()
-    result = compiled.invoke({
+    result = graph.compile().invoke({
         "candidate": candidate,
         "score": score,
         "requirements": requirements,
         "base_url": base_url,
+        "model": model,
+        "api_key": api_key,
         "pro_argument": "",
         "skeptic_argument": "",
         "adjusted_score": score,
         "verdict": "",
     })
-
     return {
         "pro": result.get("pro_argument", ""),
         "skeptic": result.get("skeptic_argument", ""),
@@ -220,58 +211,48 @@ def _run_direct_debate(
     model: str,
     base_url: str,
 ) -> dict:
-    """Direct 3-call debate without LangGraph."""
     cand = candidate
 
-    pro_prompt = PRO_PROMPT.format(
-        name=cand.get("name", ""),
-        title=cand.get("title", ""),
-        skills=", ".join((cand.get("skills") or [])[:15]),
-        score=score,
-        highlights=", ".join((cand.get("highlights") or [])[:3]),
-        resume_excerpt=(cand.get("resume_text") or "")[:800],
-    )
-    pro_text = _call_llm_sync(pro_prompt, model, api_key, base_url=base_url) or "Strong technical background."
+    pro_text = call_groq(
+        PRO_PROMPT.format(
+            name=cand.get("name", ""), title=cand.get("title", ""), score=score,
+            highlights=", ".join((cand.get("highlights") or [])[:3]),
+            skills=", ".join((cand.get("skills") or [])[:15]),
+            resume_excerpt=(cand.get("resume_text") or "")[:800],
+        ),
+        model, api_key, base_url=base_url, max_tokens=300,
+    ) or "Strong technical background warrants consideration."
 
-    skeptic_prompt = SKEPTIC_PROMPT.format(
-        name=cand.get("name", ""),
-        title=cand.get("title", ""),
-        skills=", ".join((cand.get("skills") or [])[:15]),
-        score=score,
-        hard_requirements=", ".join((requirements.get("hard_requirements") or [])[:5]),
-        resume_excerpt=(cand.get("resume_text") or "")[:800],
-    )
-    skeptic_text = _call_llm_sync(skeptic_prompt, model, api_key, base_url=base_url) or "Skill gaps present risk."
+    skeptic_text = call_groq(
+        SKEPTIC_PROMPT.format(
+            name=cand.get("name", ""), title=cand.get("title", ""), score=score,
+            hard_requirements=", ".join((requirements.get("hard_requirements") or [])[:5]),
+            skills=", ".join((cand.get("skills") or [])[:15]),
+            resume_excerpt=(cand.get("resume_text") or "")[:800],
+        ),
+        model, api_key, base_url=base_url, max_tokens=300,
+    ) or "Skill gaps present risk for this role."
 
-    adj_prompt = ADJUDICATOR_PROMPT.format(pro=pro_text, skeptic=skeptic_text, score=score)
-    adj_result = _parse_json(_call_llm_sync(adj_prompt, model, api_key, base_url=base_url, max_tokens=200))
+    adj_result = _parse_json(call_groq(
+        ADJUDICATOR_PROMPT.format(pro=pro_text, skeptic=skeptic_text, score=score),
+        model, api_key, base_url=base_url, max_tokens=200,
+    ))
     adj_score = float(adj_result.get("adjusted_score", score)) if adj_result else score
     verdict = adj_result.get("verdict", "") if adj_result else ""
 
-    return {
-        "pro": pro_text,
-        "skeptic": skeptic_text,
-        "adjusted_score": adj_score,
-        "verdict": verdict,
-    }
+    return {"pro": pro_text, "skeptic": skeptic_text, "adjusted_score": adj_score, "verdict": verdict}
 
 
 def _static_debate(candidate: dict, score: float) -> dict:
-    """Fallback when Groq is unreachable."""
+    """Static fallback — only when Groq is completely unreachable."""
     name = candidate.get("name", "Candidate")
     skills = (candidate.get("skills") or [])[:3]
     skill_str = ", ".join(skills) if skills else "general profile"
     return {
-        "pro": (
-            f"{name}'s profile shows relevant experience and skills ({skill_str}). "
-            "The career trajectory suggests capacity to grow into the role requirements quickly."
-        ),
-        "skeptic": (
-            f"With a score of {score:.0f}, there are gaps versus the top candidates. "
-            "The role's requirements are demanding and the skill delta may require a longer ramp time."
-        ),
+        "pro": f"{name}'s profile shows relevant experience ({skill_str}). Career trajectory suggests capacity to ramp quickly.",
+        "skeptic": f"With a score of {score:.0f}, gaps versus top candidates remain. Role demands may require longer ramp.",
         "adjusted_score": score,
-        "verdict": "",
+        "verdict": "[static fallback — Groq unreachable]",
     }
 
 
@@ -283,7 +264,9 @@ def run_debate(
     fast_model: str,
     base_url: str = "https://api.groq.com/openai/v1",
 ) -> dict:
-    """Entry point — chooses LangGraph or fallback."""
+    """Entry point — LangGraph debate or static fallback if no key."""
     if not api_key:
         return _static_debate(candidate, score)
-    return run_debate_with_langgraph(candidate, score, requirements, api_key, fast_model, base_url)
+    result = run_debate_with_langgraph(candidate, score, requirements, api_key, fast_model, base_url)
+    logger.info(f"[L6] Debate for {candidate.get('name')}: adj_score={result.get('adjusted_score')}")
+    return result
