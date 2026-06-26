@@ -237,7 +237,7 @@ def _should_escalate(scored: dict, api_key: str) -> bool:
     Return True if this candidate warrants deep reasoning evaluation.
     Criteria: score in borderline zone (62–88) AND either
       - the fast model flagged borderline=True, OR
-      - sub-scores are inconsistent (std dev > 10), signalling genuine uncertainty.
+      - sub-scores are inconsistent (std dev > 15), signalling genuine uncertainty.
     """
     if not api_key or scored.get("compute_path") != "fast-llm":
         return False
@@ -251,7 +251,7 @@ def _should_escalate(scored: dict, api_key: str) -> bool:
         scored.get("career_trajectory", 50),
     ]
     sub_std = statistics.stdev(sub)
-    return bool(scored.get("borderline", False)) or sub_std > 10
+    return bool(scored.get("borderline", False)) or sub_std > 15
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -306,7 +306,7 @@ def score_candidate_fast(
         skills=", ".join(candidate.get("skills", [])[:30]),
         resume_excerpt=(candidate.get("resume_text") or "")[:1500],
     )
-    response = call_groq(prompt, fast_model, api_key, base_url=base_url, max_tokens=600)
+    response = call_groq(prompt, fast_model, api_key, base_url=base_url, max_tokens=800)
     parsed = _parse_json_response(response)
     if parsed:
         parsed["compute_path"] = "fast-llm"

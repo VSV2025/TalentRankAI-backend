@@ -57,6 +57,7 @@ class CandidateOut(BaseModel):
 
 class RankedCandidate(BaseModel):
     id: int
+    rank: Optional[int] = None
     name: str
     email: str
     title: Optional[str] = None
@@ -72,5 +73,7 @@ class RankedCandidate(BaseModel):
     resumeSnippet: Optional[str] = None
     reviewNote: Optional[str] = None
     computePath: Optional[str] = None
+    graphFitScore: Optional[float] = None
+    skillBreadthScore: Optional[float] = None
 
     model_config = {"from_attributes": True}

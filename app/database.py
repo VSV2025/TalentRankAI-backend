@@ -27,3 +27,20 @@ def get_db():
 def create_tables():
     from .models import candidate, job  # noqa: F401 — ensure models are registered
     Base.metadata.create_all(bind=engine)
+    _migrate_add_columns()
+
+
+def _migrate_add_columns():
+    """Idempotent: add new columns to existing tables without dropping data."""
+    from sqlalchemy import text
+    new_cols = [
+        ("candidate_scores", "graph_fit_score",    "FLOAT DEFAULT 50.0"),
+        ("candidate_scores", "skill_breadth_score", "FLOAT DEFAULT 50.0"),
+    ]
+    with engine.connect() as conn:
+        for table, col, col_def in new_cols:
+            try:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}"))
+                conn.commit()
+            except Exception:
+                pass  # column already exists

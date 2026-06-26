@@ -96,33 +96,19 @@ def run_pipeline(
                 f"{funnel_retrieved}→{len(shortlisted_candidates)} candidates")
 
     # ──────────────────────────────────────────────────────────────────
-    # Layer 3: Graph Enrichment
+    # Layer 3: Graph Enrichment (PPR + skill breadth + inferred skills)
     # ──────────────────────────────────────────────────────────────────
     t0 = _timer()
-    skill_graph = graph_svc.build_skill_graph(shortlisted_candidates)
-
-    for cand in shortlisted_candidates:
-        # Career trajectory
-        cand["career_trajectory_score"] = graph_svc.career_trajectory_score(
-            experience_years=cand.get("experience_years", 3),
-            skills=cand.get("skills", []),
-            resume_text=cand.get("resume_text", ""),
-            title=cand.get("title"),
-        )
-        # Behavioral signal
-        cand["behavioral_score"] = graph_svc.behavioral_signal_score(
-            resume_text=cand.get("resume_text", ""),
-            skills=cand.get("skills", []),
-        )
-        # Inferred skills from graph
-        cand["inferred_skills"] = graph_svc.infer_skills(
-            cand["id"],
-            cand.get("skills", []),
-            skill_graph,
-        )
-
+    shortlisted_candidates = graph_svc.enrich_candidates(
+        shortlisted_candidates, requirements
+    )
     timings["layer3_enrichment"] = round(_timer() - t0, 2)
-    logger.info(f"Layer 3 done in {timings['layer3_enrichment']}s | graph enrichment complete")
+    inferred_total = sum(len(c.get("inferred_skills", [])) for c in shortlisted_candidates)
+    avg_fit = sum(c.get("graph_fit_score", 0) for c in shortlisted_candidates) / max(len(shortlisted_candidates), 1)
+    logger.info(
+        f"Layer 3 done in {timings['layer3_enrichment']}s | "
+        f"graph_fit_avg={avg_fit:.1f} inferred_skills={inferred_total}"
+    )
 
     # ──────────────────────────────────────────────────────────────────
     # Layer 4: Cascade Scoring (fast model + routing to deep)

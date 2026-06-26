@@ -103,6 +103,8 @@ def rank_candidates(
             borderline=cand.get("borderline", False),
             compute_path=cand.get("compute_path", "fast"),
             pipeline_timings=result.get("timings"),
+            graph_fit_score=cand.get("graph_fit_score", 50.0),
+            skill_breadth_score=cand.get("skill_breadth_score", 50.0),
         )
         db.add(score_row)
 
@@ -159,6 +161,8 @@ def get_ranked_candidates(job_id: int, db: Session = Depends(get_db)):
             "rank": s.rank,
             "borderline": s.borderline,
             "compute_path": s.compute_path,
+            "graph_fit_score": s.graph_fit_score,
+            "skill_breadth_score": s.skill_breadth_score,
             "verification_status": c.verification_status,
             "review_note": c.review_note,
             "skills": c.skills or [],
@@ -200,6 +204,7 @@ def _build_ranked_response(ranked: list[dict], candidates_db) -> list[RankedCand
 
         result.append(RankedCandidate(
             id=cand["id"],
+            rank=cand.get("rank"),
             name=cand.get("name", ""),
             email=cand.get("email", ""),
             title=cand.get("title") or None,
@@ -220,5 +225,7 @@ def _build_ranked_response(ranked: list[dict], candidates_db) -> list[RankedCand
             resumeSnippet=cand.get("resume_snippet") or None,
             reviewNote=cand.get("review_note") or None,
             computePath=cand.get("compute_path") or None,
+            graphFitScore=round(float(cand.get("graph_fit_score", 50)), 1) if cand.get("graph_fit_score") is not None else None,
+            skillBreadthScore=round(float(cand.get("skill_breadth_score", 50)), 1) if cand.get("skill_breadth_score") is not None else None,
         ))
     return result

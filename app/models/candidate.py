@@ -46,6 +46,8 @@ class CandidateScore(Base):
     rank = Column(Integer)
     borderline = Column(Boolean, default=False)
     compute_path = Column(String(20), default="fast")
+    graph_fit_score = Column(Float, default=50.0)
+    skill_breadth_score = Column(Float, default=50.0)
     pipeline_timings = Column(JSON)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 

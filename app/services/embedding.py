@@ -115,13 +115,24 @@ class VectorRetriever:
             model = self._get_embed_model()
             qdrant = self._get_qdrant(qdrant_path)
             q_emb = model.encode([query], normalize_embeddings=True)[0].tolist()
-            results = qdrant.search(
-                collection_name=COLLECTION_NAME,
-                query_vector=q_emb,
-                limit=min(top_k, 1000),
-                with_payload=False,
-            )
-            return [(r.id, float(r.score)) for r in results]
+
+            # qdrant-client >= 1.12 uses query_points; older versions use search.
+            try:
+                hits = qdrant.query_points(
+                    collection_name=COLLECTION_NAME,
+                    query=q_emb,
+                    limit=min(top_k, 1000),
+                    with_payload=False,
+                ).points
+            except AttributeError:
+                hits = qdrant.search(
+                    collection_name=COLLECTION_NAME,
+                    query_vector=q_emb,
+                    limit=min(top_k, 1000),
+                    with_payload=False,
+                )
+
+            return [(r.id, float(r.score)) for r in hits]
         except Exception as e:
             logger.error(f"Qdrant retrieval failed ({e}) — TF-IDF fallback")
             return self._retrieve_tfidf(query, top_k)

@@ -18,18 +18,24 @@ PROTECTED_LOCATIONS = [
 def _build_feature_matrix(candidates: list[dict]) -> np.ndarray:
     """
     Build feature matrix for LTR.
-    4 base features: skills_match, semantic_relevance, behavioral_signal, career_trajectory
-    + 2 derived: experience_years, skills_count
+    L4 LLM sub-scores (4): skills_match, semantic_relevance, behavioral_signal, career_trajectory
+    Raw profile features (2): experience_years, skills_count
+    L3 graph signals (2): graph_fit_score (PPR), skill_breadth_score (cluster coverage)
     """
     rows = []
     for c in candidates:
         row = [
+            # L4 LLM sub-scores
             float(c.get("skills_match", 0)) / 100.0,
             float(c.get("semantic_relevance", 0)) / 100.0,
             float(c.get("behavioral_signal", 0)) / 100.0,
             float(c.get("career_trajectory", 0)) / 100.0,
+            # Raw profile
             min(float(c.get("experience_years", 0)) / 10.0, 1.0),
             min(float(len(c.get("skills") or [])) / 20.0, 1.0),
+            # L3 graph signals
+            float(c.get("graph_fit_score", 50)) / 100.0,
+            float(c.get("skill_breadth_score", 50)) / 100.0,
         ]
         rows.append(row)
     return np.array(rows, dtype=np.float32)
