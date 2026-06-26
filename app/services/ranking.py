@@ -50,30 +50,33 @@ def _build_pseudo_labels(candidates: list[dict]) -> np.ndarray:
 
 
 def rank_with_lightgbm(candidates: list[dict]) -> list[dict]:
-    """Train a LambdaMART ranker on the candidates and return them sorted."""
+    """Train a LambdaMART ranker on the candidates and return them sorted.
+    LambdaMART requires enough samples to learn meaningful feature weights —
+    skip it for small sets where the composite sort is more reliable."""
+    if len(candidates) < 20:
+        logger.info(f"LambdaMART skipped ({len(candidates)} candidates < 20) — composite sort")
+        return _fallback_rank(candidates)
+
     try:
         import lightgbm as lgb
 
         X = _build_feature_matrix(candidates)
         y = _build_pseudo_labels(candidates)
 
-        if len(candidates) < 3:
-            return _fallback_rank(candidates)
-
-        # LambdaMART: group = all candidates are one query
         group = np.array([len(candidates)])
 
         params = {
             "objective": "lambdarank",
             "metric": "ndcg",
             "ndcg_eval_at": [5, 10],
-            "learning_rate": 0.1,
-            "num_leaves": 8,
-            "min_data_in_leaf": 1,
+            "label_gain": [0, 1, 3, 7, 15, 31, 63, 127, 255, 511, 1023],
+            "learning_rate": 0.05,
+            "num_leaves": 16,
+            "min_data_in_leaf": 3,
             "verbose": -1,
         }
         dataset = lgb.Dataset(X, label=y, group=group)
-        model = lgb.train(params, dataset, num_boost_round=50, valid_sets=[dataset], callbacks=[lgb.log_evaluation(-1)])
+        model = lgb.train(params, dataset, num_boost_round=100, valid_sets=[dataset], callbacks=[lgb.log_evaluation(-1)])
 
         scores = model.predict(X)
         ranked = sorted(
@@ -81,7 +84,7 @@ def rank_with_lightgbm(candidates: list[dict]) -> list[dict]:
             key=lambda x: x[1],
             reverse=True,
         )
-        logger.info("LambdaMART ranking complete")
+        logger.info(f"LambdaMART ranking complete ({len(candidates)} candidates)")
         return [c for c, _ in ranked]
 
     except ImportError:
@@ -93,14 +96,17 @@ def rank_with_lightgbm(candidates: list[dict]) -> list[dict]:
 
 
 def _fallback_rank(candidates: list[dict]) -> list[dict]:
-    """Sort by weighted composite score."""
+    """Sort by blended composite: LLM sub-scores + L3 graph signals."""
     def composite(c: dict) -> float:
-        return (
+        llm = (
             float(c.get("skills_match", 0)) * 0.35
             + float(c.get("semantic_relevance", 0)) * 0.30
             + float(c.get("behavioral_signal", 0)) * 0.20
             + float(c.get("career_trajectory", 0)) * 0.15
         )
+        graph_fit = float(c.get("graph_fit_score", 50))
+        breadth = float(c.get("skill_breadth_score", 50))
+        return llm * 0.85 + graph_fit * 0.10 + breadth * 0.05
     return sorted(candidates, key=composite, reverse=True)
 
 

@@ -170,29 +170,17 @@ def run_pipeline(
     logger.info(f"Layer 7 done in {timings['layer7_ltr_fairness']}s | final={len(final_ranked)}")
 
     # ──────────────────────────────────────────────────────────────────
-    # Build funnel counts
+    # Build funnel counts — all 7 layers
     # ──────────────────────────────────────────────────────────────────
+    deep_count = sum(1 for c in scored_candidates if c.get("compute_path") == "reasoning-llm")
     funnel_counts = [
-        {
-            "label": "Fast Retrieval",
-            "count": total_pool,
-            "description": "Keyword + embedding pre-filter",
-        },
-        {
-            "label": "Enrichment",
-            "count": funnel_retrieved,
-            "description": "Profile enrichment + deduplication",
-        },
-        {
-            "label": "Deep Reasoning",
-            "count": len(shortlisted_candidates),
-            "description": "LLM semantic scoring + sub-scores",
-        },
-        {
-            "label": "Ranked & Fairness-Checked",
-            "count": len(final_ranked),
-            "description": "Final shortlist with bias audit",
-        },
+        {"label": "L1 JD Parse",          "count": total_pool,                    "description": "JD decomposed into structured requirements"},
+        {"label": "L2 Retrieval",          "count": funnel_retrieved,              "description": "Embedding + keyword search, top 200"},
+        {"label": "L3 Graph Enrichment",   "count": len(shortlisted_candidates),   "description": "PPR graph fit + skill breadth scoring"},
+        {"label": "L4 Fast LLM",           "count": len(shortlisted_candidates),   "description": "8B model semantic scoring for all candidates"},
+        {"label": "L4b Reasoning LLM",     "count": deep_count,                    "description": "70B deep eval for borderline candidates"},
+        {"label": "L6 Agent Debate",       "count": borderline_count,              "description": "Pro vs Skeptic debate with adjudicator"},
+        {"label": "L7 Ranked",             "count": len(final_ranked),             "description": "Composite sort + FA*IR fairness rerank"},
     ]
 
     total_time = sum(timings.values())

@@ -53,6 +53,9 @@ Name: {name}
 Title: {title}
 Location: {location}
 Skills: {skills}
+Graph analysis (L3 signals — use as supporting context, not as scores):
+  • Graph fit: {graph_fit:.0f}/100 — skill topology alignment via Personalized PageRank
+  • Skill breadth: {skill_breadth:.0f}/100 — cluster coverage across required domains
 Resume excerpt:
 {resume_excerpt}
 
@@ -304,6 +307,8 @@ def score_candidate_fast(
         title=candidate.get("title", "Unknown title"),
         location=candidate.get("location", "Unknown"),
         skills=", ".join(candidate.get("skills", [])[:30]),
+        graph_fit=float(candidate.get("graph_fit_score", 50)),
+        skill_breadth=float(candidate.get("skill_breadth_score", 50)),
         resume_excerpt=(candidate.get("resume_text") or "")[:1500],
     )
     response = call_groq(prompt, fast_model, api_key, base_url=base_url, max_tokens=800)
