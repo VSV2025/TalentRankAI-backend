@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     FAST_MODEL: str = "llama-3.1-8b-instant"
     REASONING_MODEL: str = "llama-3.3-70b-versatile"
     RECRUITER_PASSWORD: str = "12112006"
-    # Comma-separated list — set CORS_ORIGINS env var on Railway to include your Vercel URL
+    # Comma-separated list — set CORS_ORIGINS env var on Render to include your Vercel URL
     CORS_ORIGINS: str = "https://talentrank-ai.vercel.app,http://localhost:5174,http://localhost:5173,http://localhost:3000"
 
     def get_cors_origins(self) -> list[str]:

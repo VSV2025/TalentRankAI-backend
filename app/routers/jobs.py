@@ -19,6 +19,16 @@ logger = logging.getLogger(__name__)
 
 # In-memory job store: task_id -> {status, layer, progress, error}
 _ranking_jobs: dict = {}
+_MAX_STORED_TASKS = 200
+
+
+def _prune_jobs() -> None:
+    """Remove oldest completed/errored tasks when store exceeds limit."""
+    if len(_ranking_jobs) <= _MAX_STORED_TASKS:
+        return
+    done = [k for k, v in _ranking_jobs.items() if v["status"] in ("done", "error")]
+    for k in done[:len(_ranking_jobs) - _MAX_STORED_TASKS]:
+        del _ranking_jobs[k]
 
 
 @router.post("/", response_model=JobOut, status_code=status.HTTP_201_CREATED)
@@ -81,6 +91,7 @@ def rank_candidates(
 
     task_id = str(uuid.uuid4())
     _ranking_jobs[task_id] = {"status": "running", "layer": "Starting pipeline…", "progress": 0, "error": None}
+    _prune_jobs()
 
     def _run_pipeline_bg():
         db2 = SessionLocal()
