@@ -561,7 +561,7 @@ def enrich_candidates(
 
         # Heuristic scores (L3 baseline — L4 LLM will produce its own assessment)
         cand["career_trajectory_score"] = career_trajectory_score(
-            experience_years=cand.get("experience_years", 3),
+            experience_years=cand.get("experience_years") or 0.0,
             skills=cand.get("skills", []),
             resume_text=resume_text,
             title=cand.get("title"),

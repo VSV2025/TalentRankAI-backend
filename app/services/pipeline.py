@@ -4,7 +4,10 @@ logs per-layer timings, and returns a ranked shortlist.
 """
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
+
+SMALL_POOL_THRESHOLD = 50  # skip Qdrant vector index for pools smaller than this
 
 from ..config import get_settings
 from . import embedding as emb_svc
@@ -23,7 +26,9 @@ def _timer():
 def run_pipeline(
     job_description: str,
     candidates: list[dict],
+    progress_cb=None,
 ) -> dict:
+    """progress_cb(layer_label: str, pct: int) — called after each layer completes."""
     """
     Execute all 7 pipeline layers on the provided candidates.
 
@@ -46,7 +51,14 @@ def run_pipeline(
     reasoning_model = settings.REASONING_MODEL
     timings = {}
 
-    total_pool = 10000  # simulated full applicant pool
+    def _emit(layer: str, pct: int) -> None:
+        if progress_cb:
+            try:
+                progress_cb(layer, pct)
+            except Exception:
+                pass
+
+    total_pool = len(candidates)  # actual candidate pool size
 
     # ──────────────────────────────────────────────────────────────────
     # Layer 1: JD Understanding
@@ -59,6 +71,7 @@ def run_pipeline(
     timings["layer1_jd_understanding"] = round(_timer() - t0, 2)
     logger.info(f"Layer 1 done in {timings['layer1_jd_understanding']}s | "
                 f"key_skills={requirements.get('key_skills', [])[:4]}")
+    _emit("L1 JD Parse", 14)
 
     # ──────────────────────────────────────────────────────────────────
     # Layer 2: Fast Retrieval + Rerank
@@ -67,20 +80,23 @@ def run_pipeline(
     query = job_description + " " + " ".join(requirements.get("key_skills", []))
 
     qdrant_path = settings.QDRANT_PATH
+    candidate_docs = [
+        {"id": c["id"], "text": (c.get("resume_text") or "") + " " + " ".join(c.get("skills") or [])}
+        for c in candidates
+    ]
 
-    # Build vector index (sentence-transformers → Qdrant ANN, falls back to TF-IDF)
-    emb_svc.build_index(
-        [{"id": c["id"], "text": (c.get("resume_text") or "") + " " + " ".join(c.get("skills") or [])}
-         for c in candidates],
-        qdrant_path=qdrant_path,
-    )
-
-    retrieved = emb_svc.retrieve_top(query, top_k=min(200, len(candidates)), qdrant_path=qdrant_path)
-    retrieved_ids = {cid for cid, _ in retrieved}
-    retrieved_candidates = [c for c in candidates if c["id"] in retrieved_ids]
-
-    # Simulate 10K → 200 narrowing
-    funnel_retrieved = min(200, len(retrieved_candidates))
+    if len(candidates) >= SMALL_POOL_THRESHOLD:
+        # Large pool: build vector index (sentence-transformers → Qdrant ANN)
+        emb_svc.build_index(candidate_docs, qdrant_path=qdrant_path)
+        retrieved = emb_svc.retrieve_top(query, top_k=min(200, len(candidates)), qdrant_path=qdrant_path)
+        retrieved_ids = {cid for cid, _ in retrieved}
+        retrieved_candidates = [c for c in candidates if c["id"] in retrieved_ids]
+        funnel_retrieved = min(200, len(retrieved_candidates))
+    else:
+        # Small pool: skip vector index — cross-encoder rerank directly is faster and accurate enough
+        retrieved_candidates = candidates
+        funnel_retrieved = len(candidates)
+        logger.info(f"Layer 2: small pool ({len(candidates)}) — skipping Qdrant, using cross-encoder directly")
 
     # Cross-encoder rerank → top 30
     reranked = emb_svc.rerank_top(
@@ -94,6 +110,7 @@ def run_pipeline(
     timings["layer2_retrieval"] = round(_timer() - t0, 2)
     logger.info(f"Layer 2 done in {timings['layer2_retrieval']}s | "
                 f"{funnel_retrieved}→{len(shortlisted_candidates)} candidates")
+    _emit("L2 Retrieval", 28)
 
     # ──────────────────────────────────────────────────────────────────
     # Layer 3: Graph Enrichment (PPR + skill breadth + inferred skills)
@@ -109,6 +126,7 @@ def run_pipeline(
         f"Layer 3 done in {timings['layer3_enrichment']}s | "
         f"graph_fit_avg={avg_fit:.1f} inferred_skills={inferred_total}"
     )
+    _emit("L3 Graph Enrichment", 42)
 
     # ──────────────────────────────────────────────────────────────────
     # Layer 4: Cascade Scoring (fast model + routing to deep)
@@ -123,10 +141,12 @@ def run_pipeline(
         base_url=base_url,
     )
     timings["layer4_scoring"] = round(_timer() - t0, 2)
-    fast_count = sum(1 for c in scored_candidates if c.get("compute_path") == "fast")
-    deep_count = sum(1 for c in scored_candidates if c.get("compute_path") == "deep")
+    fast_count = sum(1 for c in scored_candidates if c.get("compute_path") == "fast-llm")
+    deep_count = sum(1 for c in scored_candidates if c.get("compute_path") == "reasoning-llm")
     logger.info(f"Layer 4 done in {timings['layer4_scoring']}s | "
-                f"fast={fast_count} deep={deep_count} fallback={len(scored_candidates)-fast_count-deep_count}")
+                f"fast-llm={fast_count} reasoning-llm={deep_count} heuristic={len(scored_candidates)-fast_count-deep_count}")
+    _emit("L4 Fast Scoring", 57)
+    _emit("L4b Deep Reasoning", 71)
 
     # ──────────────────────────────────────────────────────────────────
     # Layer 5: Multimodal (skip — no portfolio images in seed data)
@@ -134,15 +154,22 @@ def run_pipeline(
     timings["layer5_multimodal"] = 0.0
 
     # ──────────────────────────────────────────────────────────────────
-    # Layer 6: Multi-Agent Debate (borderline candidates only)
+    # Layer 6: Multi-Agent Debate (borderline candidates, concurrent)
     # ──────────────────────────────────────────────────────────────────
     t0 = _timer()
-    borderline_count = 0
-    for cand in scored_candidates:
-        overall = cand.get("overall_score", 50)
-        if 65 <= overall <= 85:
-            borderline_count += 1
-            debate_result = debate_svc.run_debate(
+    borderline_cands = [
+        (c, c.get("overall_score", 50))
+        for c in scored_candidates
+        if 65 <= c.get("overall_score", 50) <= 85
+    ]
+    for c in scored_candidates:
+        if not (65 <= c.get("overall_score", 50) <= 85):
+            c["debate"] = None
+
+    def _run_debate(item: tuple) -> None:
+        cand, overall = item
+        try:
+            result = debate_svc.run_debate(
                 candidate=cand,
                 score=overall,
                 requirements=requirements,
@@ -150,16 +177,23 @@ def run_pipeline(
                 fast_model=fast_model,
                 base_url=base_url,
             )
-            cand["debate"] = {"pro": debate_result["pro"], "skeptic": debate_result["skeptic"]}
-            adj_score = debate_result.get("adjusted_score", overall)
+            cand["debate"] = {"pro": result["pro"], "skeptic": result["skeptic"]}
+            adj_score = result.get("adjusted_score", overall)
             if abs(adj_score - overall) > 2:
                 cand["overall_score"] = adj_score
                 logger.info(f"Debate adjusted {cand.get('name')} score {overall:.1f}→{adj_score:.1f}")
-        else:
+        except Exception as e:
+            logger.warning(f"[L6] Debate failed for {cand.get('name')}: {e}")
             cand["debate"] = None
 
+    if borderline_cands:
+        with ThreadPoolExecutor(max_workers=min(len(borderline_cands), 4)) as ex:
+            list(ex.map(_run_debate, borderline_cands))
+
+    borderline_count = len(borderline_cands)
     timings["layer6_debate"] = round(_timer() - t0, 2)
     logger.info(f"Layer 6 done in {timings['layer6_debate']}s | {borderline_count} debates")
+    _emit("L6 Agent Debate", 85)
 
     # ──────────────────────────────────────────────────────────────────
     # Layer 7: LTR + Fairness
@@ -168,6 +202,7 @@ def run_pipeline(
     final_ranked = ranking_svc.compute_final_ranking(scored_candidates)
     timings["layer7_ltr_fairness"] = round(_timer() - t0, 2)
     logger.info(f"Layer 7 done in {timings['layer7_ltr_fairness']}s | final={len(final_ranked)}")
+    _emit("L7 Rank & Fairness", 100)
 
     # ──────────────────────────────────────────────────────────────────
     # Build funnel counts — all 7 layers

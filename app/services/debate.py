@@ -1,7 +1,7 @@
 """
 Layer 6 — Multi-agent debate using LangGraph.
 Three agents: ProAdvocate, Skeptic, Adjudicator.
-Only runs for borderline candidates (score 62-88).
+Only runs for borderline candidates (score 60-88).
 Rate limiting and retries handled by llm_client.
 Falls back to static template only if Groq is completely unreachable.
 """

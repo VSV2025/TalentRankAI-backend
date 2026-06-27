@@ -185,14 +185,15 @@ def run_verification(
             "badge": "Consistency check skipped",
         })
 
-    # Derive overall status
+    # Derive overall status.
+    # "pending" only comes from email_confirm which is always pending in this system.
+    # Treat it as informational — don't let it block "verified" when all real checks pass.
     statuses = [c["result"] for c in checks]
     if "review" in statuses:
         overall = "review"
-    elif all(s in ("pass", "pending") for s in statuses):
-        overall = "verified" if "pending" not in statuses else "pending"
     else:
-        overall = "pending"
+        non_pending = [s for s in statuses if s != "pending"]
+        overall = "verified" if non_pending and all(s == "pass" for s in non_pending) else "pending"
 
     return {
         "checks": checks,

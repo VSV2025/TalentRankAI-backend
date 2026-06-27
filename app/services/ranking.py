@@ -4,15 +4,20 @@ Self-supervised: cascade scores are used as pseudo-labels for LTR training.
 Falls back to weighted composite sort if LightGBM is unavailable.
 """
 import logging
+import re
 import numpy as np
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Geographic diversity signals — word-boundary matched to avoid "in" matching "Berlin"/"Austin"
 PROTECTED_LOCATIONS = [
-    # Geographic diversity signals — we track representation, not discriminate
     "remote", "uk", "de", "jp", "uae", "mx", "eu", "in", "sg", "au",
 ]
+
+_PROTECTED_RE = re.compile(
+    r'\b(' + '|'.join(re.escape(t) for t in PROTECTED_LOCATIONS) + r')\b'
+)
 
 
 def _build_feature_matrix(candidates: list[dict]) -> np.ndarray:
@@ -96,18 +101,22 @@ def rank_with_lightgbm(candidates: list[dict]) -> list[dict]:
 
 
 def _fallback_rank(candidates: list[dict]) -> list[dict]:
-    """Sort by blended composite: LLM sub-scores + L3 graph signals."""
+    """
+    Sort by blended composite: LLM overall_score (primary) + L3 graph signals.
+    Updates overall_score to the composite so the displayed score always matches the rank order.
+    """
     def composite(c: dict) -> float:
-        llm = (
-            float(c.get("skills_match", 0)) * 0.35
-            + float(c.get("semantic_relevance", 0)) * 0.30
-            + float(c.get("behavioral_signal", 0)) * 0.20
-            + float(c.get("career_trajectory", 0)) * 0.15
-        )
+        llm_score = float(c.get("overall_score", 0))
         graph_fit = float(c.get("graph_fit_score", 50))
-        breadth = float(c.get("skill_breadth_score", 50))
-        return llm * 0.85 + graph_fit * 0.10 + breadth * 0.05
-    return sorted(candidates, key=composite, reverse=True)
+        breadth   = float(c.get("skill_breadth_score", 50))
+        return llm_score * 0.85 + graph_fit * 0.10 + breadth * 0.05
+
+    sorted_candidates = sorted(candidates, key=composite, reverse=True)
+    # Sync overall_score with composite so UI score ↔ rank is consistent
+    for c in sorted_candidates:
+        c["llm_raw_score"] = c.get("overall_score", 0)  # preserve LLM score
+        c["overall_score"] = round(composite(c), 1)
+    return sorted_candidates
 
 
 def fairness_rerank(candidates: list[dict], p_min: float = 0.3) -> list[dict]:
@@ -122,10 +131,10 @@ def fairness_rerank(candidates: list[dict], p_min: float = 0.3) -> list[dict]:
     if len(candidates) <= 2:
         return candidates
 
-    # Tag candidates with diversity signal
+    # Tag candidates with diversity signal — word-boundary match so "in" doesn't match "Berlin"
     def is_diverse(c: dict) -> bool:
         loc = (c.get("location") or "").lower()
-        return any(tag in loc for tag in PROTECTED_LOCATIONS)
+        return bool(_PROTECTED_RE.search(loc))
 
     # Count current diversity in top-10
     top10 = candidates[:min(10, len(candidates))]

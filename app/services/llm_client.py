@@ -15,9 +15,18 @@ logger = logging.getLogger(__name__)
 # ── Prompt-hash result cache ───────────────────────────────────────────────────
 _cache: dict[str, str] = {}
 
-# ── Retry waits (seconds) after successive 429s ────────────────────────────────
-# Long enough to let calls age out of Groq's 60-second window.
-_RETRY_WAITS = (15, 30, 60, 120)
+# ── Per-model retry schedules after successive 429s ───────────────────────────
+# Fast model (25 RPM): window clears quickly — short waits are fine.
+# Reasoning model (4 RPM / ~6K TPM): window needs longer to clear.
+_FAST_RETRY_WAITS = (5, 10, 20, 40)
+_SLOW_RETRY_WAITS = (15, 30, 60, 120)
+
+
+def _get_retry_waits(model: str) -> tuple:
+    m = model.lower()
+    if any(tag in m for tag in ("70b", "versatile", "8x7b", "opus", "large")):
+        return _SLOW_RETRY_WAITS
+    return _FAST_RETRY_WAITS
 
 
 # ── Sliding-window rate limiter ────────────────────────────────────────────────
@@ -106,8 +115,9 @@ def call_groq(
 
     limiter = _get_limiter(model)
     client = OpenAI(api_key=api_key, base_url=base_url)
+    retry_waits = _get_retry_waits(model)
 
-    for attempt in range(len(_RETRY_WAITS) + 1):
+    for attempt in range(len(retry_waits) + 1):
         limiter.acquire(label=model)
         try:
             resp = client.chat.completions.create(
@@ -121,20 +131,20 @@ def call_groq(
             return text
 
         except RateLimitError as e:
-            if attempt >= len(_RETRY_WAITS):
+            if attempt >= len(retry_waits):
                 logger.error(
-                    f"[groq] 429 on {model}: all {len(_RETRY_WAITS) + 1} attempts exhausted — "
+                    f"[groq] 429 on {model}: all {len(retry_waits) + 1} attempts exhausted — "
                     f"caller will use heuristic fallback"
                 )
                 return None
             # Use Retry-After header when Groq provides it; otherwise use our schedule
-            wait = _RETRY_WAITS[attempt]
+            wait = retry_waits[attempt]
             try:
                 wait = max(wait, int(e.response.headers.get("retry-after", wait)))
             except Exception:
                 pass
             logger.warning(
-                f"[groq] 429 on {model} — retry {attempt + 1}/{len(_RETRY_WAITS)} "
+                f"[groq] 429 on {model} — retry {attempt + 1}/{len(retry_waits)} "
                 f"in {wait}s (rate limit window clearing)"
             )
             time.sleep(wait)
