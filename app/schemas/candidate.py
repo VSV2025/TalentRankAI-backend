@@ -8,6 +8,7 @@ class SubScores(BaseModel):
     semanticRelevance: float
     behavioralSignal: float
     careerTrajectory: float
+    productionEvidence: float = 0.0
 
 
 class DebateTranscript(BaseModel):
@@ -48,6 +49,11 @@ class CandidateOut(BaseModel):
     email: str
     title: Optional[str] = None
     location: Optional[str] = None
+    phone: Optional[str] = None
+    skills: Optional[list] = None
+    experience_years: Optional[float] = None
+    resume_snippet: Optional[str] = None
+    resume_text: Optional[str] = None
     verification_status: str
     review_note: Optional[str] = None
     created_at: datetime
@@ -75,5 +81,7 @@ class RankedCandidate(BaseModel):
     computePath: Optional[str] = None
     graphFitScore: Optional[float] = None
     skillBreadthScore: Optional[float] = None
+    careerTrajectoryDetail: Optional[str] = None
+    gaps: Optional[list[str]] = None
 
     model_config = {"from_attributes": True}

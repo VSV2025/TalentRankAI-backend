@@ -37,13 +37,15 @@ Extract and return ONLY a JSON object with this exact shape:
 
 Be precise. Hard requirements must be met. Return only the JSON, no markdown."""
 
-CANDIDATE_SCORE_PROMPT = """You are a technical recruiter scoring a candidate against a job description.
+CANDIDATE_SCORE_PROMPT = """You are a technical recruiter scoring a candidate for: {role_context}
 
 SCORING RULES — read before answering:
 • Every score MUST be a precise decimal to one decimal place (e.g. 73.4, 88.2, 61.7).
-• NEVER use round numbers (70.0, 75.0, 80.0, etc.) — round numbers mean you haven't assessed this specific candidate.
-• Compute overall_score using the exact formula: (skills_match × 0.35) + (semantic_relevance × 0.30) + (behavioral_signal × 0.20) + (career_trajectory × 0.15). Round to one decimal.
-• Base each sub-score on concrete evidence from this candidate's resume, not generic estimates.
+• NEVER use round numbers (70.0, 75.0, 80.0, etc.).
+• Formula: overall_score = (skills_match × 0.30) + (career_trajectory × 0.28) + (semantic_relevance × 0.25) + (behavioral_signal × 0.17). Compute mentally, write ONLY the result.
+• Base each sub-score on concrete evidence from this specific candidate's resume.
+• career_trajectory scoring guide: ≥ 85 for Staff/Principal ML/AI (7+ yr), ≥ 75 for Senior ML/AI (5+ yr), 40–70 for engineers pivoting into ML, < 30 ONLY for completely wrong fields (pure frontend, UI designer, QA, PM with no ML).
+• production_evidence: MUST score 0 if there is NO mention of deployed/production ML systems.
 
 JD Requirements (structured):
 {requirements}
@@ -59,46 +61,56 @@ Graph analysis (L3 signals — use as supporting context, not as scores):
 Resume excerpt:
 {resume_excerpt}
 
-Score on 4 dimensions (0–100 each):
-1. skills_match: what fraction of hard requirements this candidate demonstrably meets
-2. semantic_relevance: semantic fit between their experience and the JD context
-3. behavioral_signal: evidence of measurable impact, leadership, ownership
-4. career_trajectory: career progression and seniority alignment with this role
+Score on 5 dimensions (0–100 each):
+1. skills_match: fraction of JD hard requirements this candidate demonstrably meets via skills + experience
+2. career_trajectory: how well their career HISTORY fits this ML/AI role:
+   • ≥ 85 for Staff/Principal ML/AI engineers with 7+ years in production ML
+   • ≥ 75 for Senior ML/AI engineers with 5+ years in ML/AI
+   • 40–70 for software engineers actively pivoting to ML, data scientists
+   • < 30 ONLY for completely wrong-field candidates (frontend dev, UI/UX designer, QA, PM with no ML)
+3. semantic_relevance: semantic fit between their actual experience and the JD context
+4. behavioral_signal: evidence of measurable impact, ownership, leadership, team influence
+5. production_evidence: evidence of shipped ML/AI systems in production — 0 if only research/academic, 100 if multiple production deployments with metrics
 
-Return ONLY this JSON — no markdown, no extra text, no formulas inside the JSON:
+Return ONLY this JSON — no markdown, no extra text:
 {{
-  "skills_match": <decimal number only, e.g. 73.4>,
-  "semantic_relevance": <decimal number only>,
-  "behavioral_signal": <decimal number only>,
-  "career_trajectory": <decimal number only>,
-  "overall_score": <decimal number only — compute the formula mentally, write ONLY the result>,
-  "highlights": ["...", "...", "..."],
-  "why_rank": "2–3 sentences on this specific candidate's fit",
-  "evidence": ["quoted snippet — why relevant", "quoted snippet — why relevant"],
-  "borderline": <true if overall_score is between 62 and 88>
+  "skills_match": <decimal>,
+  "career_trajectory": <decimal — ≥ 75 for senior ML/AI titles; < 30 ONLY for wrong field like frontend/QA/PM>,
+  "semantic_relevance": <decimal>,
+  "behavioral_signal": <decimal>,
+  "production_evidence": <decimal — 0 for pure research, scale by deployment evidence>,
+  "overall_score": <decimal — compute (SM×0.30)+(CT×0.28)+(SR×0.25)+(BS×0.17), write ONLY the result>,
+  "highlights": ["specific strength 1", "specific strength 2", "specific strength 3"],
+  "why_rank": "2–3 sentences on this specific candidate's fit for this exact role",
+  "evidence": ["direct quote or concrete fact from resume", "another direct quote or fact"],
+  "career_trajectory_detail": "3-5 sentences. Describe where their career started (first role/domain), how they progressed (key transitions, promotions, growing scope), what their current level represents, and whether the overall arc is pointing toward this ML/AI engineering role or diverging from it. Reference specific job titles and domains if visible in the resume.",
+  "gaps": ["Specific hard requirement from the JD this candidate does not clearly meet — write a full sentence explaining the gap and why it matters for this role. E.g. 'No RLHF experience: the JD lists RLHF as a strong plus for fine-tuning work and this candidate has no mention of reward modeling or human feedback pipelines.'", "gap 2 written as a full explanatory sentence", "gap 3 if applicable — only list real gaps, not areas they partially cover"],
+  "borderline": <true if overall_score is between 60 and 88>
 }}"""
 
-CANDIDATE_SCORE_DEEP_PROMPT = """You are a senior technical director doing a deep evaluation of a borderline candidate.
+CANDIDATE_SCORE_DEEP_PROMPT = """You are a senior technical director doing a deep evaluation of a borderline candidate for: {role_context}
 Initial fast-pass score was {fast_score:.1f}. Return a DISTINCT, evidence-based score — never match the initial score exactly.
 
-IMPORTANT — output format: Write the JSON block FIRST (lines 1–14 of your response), then your step-by-step reasoning.
-This ensures the JSON is captured even if your response is long.
+IMPORTANT — output format: Write the JSON block FIRST (lines 1–15 of your response), then your step-by-step reasoning.
 
 START YOUR RESPONSE WITH THIS JSON (fill in real decimal numbers, no formulas):
 {{
   "skills_match": <0-100 decimal>,
+  "career_trajectory": <≥ 85 for Staff/Principal ML/AI 7+ yr; ≥ 75 for Senior ML/AI 5+ yr; 40-70 for pivot; < 30 ONLY for wrong field (frontend/QA/PM)>,
   "semantic_relevance": <0-100 decimal>,
   "behavioral_signal": <0-100 decimal>,
-  "career_trajectory": <0-100 decimal>,
-  "overall_score": <compute (SM×0.35)+(SR×0.30)+(BS×0.20)+(CT×0.15), write ONLY the result decimal>,
+  "production_evidence": <0 for pure research, scale by production deployment evidence>,
+  "overall_score": <compute (SM×0.30)+(CT×0.28)+(SR×0.25)+(BS×0.17), write ONLY the result decimal>,
   "highlights": ["specific strength 1", "specific strength 2"],
   "why_rank": "2 sentences on fit vs. this specific JD",
   "evidence": ["direct quote or fact from resume", "direct quote or fact"],
+  "career_trajectory_detail": "3-5 sentences. Describe where their career started (first role/domain), how they progressed (key transitions, promotions, growing scope), what their current level represents, and whether the overall arc is pointing toward this ML/AI engineering role or diverging from it. Reference specific job titles and domains if visible in the resume.",
+  "gaps": ["Specific hard requirement from the JD this candidate does not clearly meet — write a full sentence explaining the gap and why it matters for this role.", "gap 2 as a full explanatory sentence", "gap 3 if applicable"],
   "borderline": <true/false>,
   "uncertainty_note": "one sentence on the key open question for this candidate"
 }}
 
-THEN explain your reasoning (not part of the JSON):
+THEN explain your reasoning:
 - For each hard requirement: MET / PARTIAL / MISSING with resume evidence
 - How you derived each sub-score
 - Why overall is not a round number
@@ -116,7 +128,7 @@ Resume: {resume_excerpt}"""
 # JSON parsing
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SUB_KEYS = ("skills_match", "semantic_relevance", "behavioral_signal", "career_trajectory")
+_SUB_KEYS = ("skills_match", "career_trajectory", "semantic_relevance", "behavioral_signal", "production_evidence")
 
 
 def _normalize_score_scale(parsed: dict) -> dict:
@@ -139,12 +151,19 @@ def _normalize_score_scale(parsed: dict) -> dict:
         for k in _SUB_KEYS:
             if k in parsed:
                 parsed[k] = round(parsed[k] * 100, 1)
-        # Recompute overall from the rescaled sub-scores (don't trust model's overall)
-        sm = parsed.get("skills_match", 50)
-        sr = parsed.get("semantic_relevance", 50)
-        bs = parsed.get("behavioral_signal", 50)
-        ct = parsed.get("career_trajectory", 50)
-        parsed["overall_score"] = round(sm * 0.35 + sr * 0.30 + bs * 0.20 + ct * 0.15, 1)
+
+    # Always recompute overall_score from sub-scores for formula consistency
+    sm = parsed.get("skills_match", 50.0)
+    ct = parsed.get("career_trajectory", 50.0)
+    sr = parsed.get("semantic_relevance", 50.0)
+    bs = parsed.get("behavioral_signal", 50.0)
+    computed = round(sm * 0.30 + ct * 0.28 + sr * 0.25 + bs * 0.17, 1)
+    model_overall = parsed.get("overall_score", computed)
+    if abs(model_overall - computed) > 12:
+        logger.warning(
+            f"[scoring] overall_score mismatch: model={model_overall} formula={computed} — using formula"
+        )
+    parsed["overall_score"] = computed
     return parsed
 
 
@@ -194,11 +213,12 @@ def _parse_json_response(text: Optional[str]) -> Optional[dict]:
         return None
 
     # Pre-process: strip markdown fences and formula-in-JSON artefacts.
-    # Regex removes ``` and ```json fences (any flavour).
     cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`").strip()
-    # Some fast models write: "overall_score": (73.4 × 0.35) + (92.1 × 0.30) + ...
-    # That's not valid JSON — strip those formula lines (the key appears again with the real value).
+    # Some fast models write: "overall_score": (73.4 × 0.35) + ... — not valid JSON
     cleaned = re.sub(r'"overall_score"\s*:\s*\([^)]*\)[^,\n]*,?\s*\n?', "", cleaned)
+    # Fix split array syntax: "key": ["a"], ["b"] → "key": ["a", "b"]
+    # Happens when model writes multi-item arrays as separate array literals
+    cleaned = re.sub(r'\]\s*,\s*\n?\s*\[', ', ', cleaned)
 
     def _try(s: str) -> Optional[dict]:
         try:
@@ -227,6 +247,27 @@ def _parse_json_response(text: Optional[str]) -> Optional[dict]:
             if result and "overall_score" in result:
                 return result
 
+    # 3. Regex rescue: response was truncated (e.g. highlights array cut off mid-string)
+    # but all numeric scores are present. Extract them individually.
+    _NUM_KEYS = ("skills_match", "career_trajectory", "semantic_relevance",
+                 "behavioral_signal", "production_evidence", "overall_score")
+    rescued: dict = {}
+    for k in _NUM_KEYS:
+        m = re.search(rf'"{k}"\s*:\s*([\d.]+)', cleaned)
+        if m:
+            rescued[k] = float(m.group(1))
+    if "overall_score" in rescued and len(rescued) >= 5:
+        logger.warning(f"[scoring] JSON truncated — rescued {len(rescued)} numeric fields via regex")
+        rescued.setdefault("highlights", [])
+        rescued.setdefault("why_rank", "")
+        rescued.setdefault("evidence", [])
+        # Extract why_rank if present (partial string is OK)
+        wr = re.search(r'"why_rank"\s*:\s*"([^"]{20,})', cleaned)
+        if wr:
+            rescued["why_rank"] = wr.group(1)
+        rescued["borderline"] = bool(60 <= rescued.get("overall_score", 0) <= 88)
+        return _normalize_score_scale(rescued)
+
     logger.warning(f"[scoring] JSON parse failed: {text[:300]}")
     return None
 
@@ -238,14 +279,14 @@ def _parse_json_response(text: Optional[str]) -> Optional[dict]:
 def _should_escalate(scored: dict, api_key: str) -> bool:
     """
     Return True if this candidate warrants deep reasoning evaluation.
-    Criteria: score in borderline zone (62–88) AND either
+    Criteria: score in borderline zone (60–88) AND either
       - the fast model flagged borderline=True, OR
       - sub-scores are inconsistent (std dev > 15), signalling genuine uncertainty.
     """
     if not api_key or scored.get("compute_path") != "fast-llm":
         return False
     overall = scored.get("overall_score", 0)
-    if not (62 <= overall <= 88):
+    if not (60 <= overall <= 88):
         return False
     sub = [
         scored.get("skills_match", 50),
@@ -281,15 +322,37 @@ def decompose_jd(
 def _fallback_jd_decompose(jd_text: str) -> dict:
     """Keyword-based JD decomposition — emergency fallback only."""
     lower = jd_text.lower()
-    skills = [kw for kw in ["python", "pytorch", "llm", "distributed training", "mlops", "cuda", "kubernetes"] if kw in lower]
-    seniority = "principal" if any(w in lower for w in ["principal", "staff"]) else "junior" if any(w in lower for w in ["junior", "entry"]) else "senior"
+    # Broad keyword list covering ML, data, software, and infrastructure roles
+    _ALL_KW = [
+        "python", "pytorch", "tensorflow", "jax", "keras", "scikit-learn",
+        "llm", "large language model", "fine-tuning", "rlhf", "rag",
+        "distributed training", "deepspeed", "cuda", "gpu",
+        "mlops", "mlflow", "kubeflow", "airflow",
+        "kubernetes", "docker", "aws", "gcp", "azure",
+        "sql", "postgresql", "mongodb", "spark", "kafka",
+        "react", "typescript", "javascript", "node.js", "fastapi",
+        "machine learning", "deep learning", "neural network",
+        "data science", "data engineering", "data pipeline",
+        "rust", "go", "java", "c++",
+    ]
+    skills = [kw for kw in _ALL_KW if kw in lower]
+    seniority = "principal" if any(w in lower for w in ["principal", "staff", "distinguished"]) else \
+                "senior" if any(w in lower for w in ["senior", "lead", "head of"]) else \
+                "junior" if any(w in lower for w in ["junior", "entry", "intern", "graduate"]) else "mid"
+    context = "Technical role"
+    if any(w in lower for w in ["machine learning", "ml engineer", "ai engineer"]):
+        context = "ML/AI engineering role"
+    elif any(w in lower for w in ["data science", "data scientist"]):
+        context = "Data science role"
+    elif any(w in lower for w in ["software engineer", "backend", "fullstack"]):
+        context = "Software engineering role"
     return {
-        "hard_requirements": skills[:5],
-        "nice_to_have": [],
+        "hard_requirements": skills[:6],
+        "nice_to_have": skills[6:10],
         "negotiable": [],
         "implied_seniority": seniority,
-        "key_skills": skills,
-        "context": "ML engineering role requiring Python and LLM experience.",
+        "key_skills": skills[:12],
+        "context": f"{seniority.capitalize()} {context}.",
     }
 
 
@@ -301,7 +364,9 @@ def score_candidate_fast(
     base_url: str = "https://api.groq.com/openai/v1",
 ) -> dict:
     """Score a single candidate using the fast Groq model."""
+    role_ctx = requirements.get("context", "Senior ML/AI Engineering role")
     prompt = CANDIDATE_SCORE_PROMPT.format(
+        role_context=role_ctx,
         requirements=json.dumps(requirements, indent=2),
         name=candidate.get("name", ""),
         title=candidate.get("title", "Unknown title"),
@@ -311,11 +376,12 @@ def score_candidate_fast(
         skill_breadth=float(candidate.get("skill_breadth_score", 50)),
         resume_excerpt=(candidate.get("resume_text") or "")[:1500],
     )
-    response = call_groq(prompt, fast_model, api_key, base_url=base_url, max_tokens=800)
+    response = call_groq(prompt, fast_model, api_key, base_url=base_url, max_tokens=1200)
     parsed = _parse_json_response(response)
     if parsed:
         parsed["compute_path"] = "fast-llm"
-        logger.info(f"[L4/fast] {candidate.get('name')} → overall={parsed.get('overall_score')}")
+        logger.info(f"[L4/fast] {candidate.get('name')} → overall={parsed.get('overall_score')} "
+                    f"ct={parsed.get('career_trajectory')} prod={parsed.get('production_evidence')}")
         return parsed
     logger.warning(f"[L4] Fast LLM failed for {candidate.get('name')} — heuristic fallback")
     return _fallback_score(candidate, requirements)
@@ -330,7 +396,9 @@ def score_candidate_deep(
     base_url: str = "https://api.groq.com/openai/v1",
 ) -> dict:
     """Score a borderline candidate using the reasoning Groq model."""
+    role_ctx = requirements.get("context", "Senior ML/AI Engineering role")
     prompt = CANDIDATE_SCORE_DEEP_PROMPT.format(
+        role_context=role_ctx,
         fast_score=fast_score,
         requirements=json.dumps(requirements, indent=2),
         name=candidate.get("name", ""),
@@ -358,11 +426,13 @@ def _fallback_score(candidate: dict, requirements: dict) -> dict:
     else:
         skills_match = 60.0
 
-    exp = min((candidate.get("experience_years") or 3) / 8.0, 1.0) * 30
+    exp_yrs = candidate.get("experience_years") if candidate.get("experience_years") is not None else 0.0
+    exp = min(exp_yrs / 8.0, 1.0) * 30
     semantic_relevance = round(min(skills_match * 0.7 + exp + 20, 100), 1)
     behavioral = round(min(50 + len(skills) * 1.5, 90), 1)
-    trajectory = round(min(40 + (candidate.get("experience_years") or 3) * 4, 95), 1)
-    overall = round(skills_match * 0.35 + semantic_relevance * 0.30 + behavioral * 0.20 + trajectory * 0.15, 1)
+    trajectory = round(min(40 + exp_yrs * 4, 95), 1)
+    production_evidence = round(min(skills_match * 0.5 + exp * 0.5, 80), 1)
+    overall = round(skills_match * 0.30 + trajectory * 0.28 + semantic_relevance * 0.25 + behavioral * 0.17, 1)
 
     logger.warning(
         f"[L4/HEURISTIC] {candidate.get('name')} scored via emergency fallback "
@@ -370,14 +440,15 @@ def _fallback_score(candidate: dict, requirements: dict) -> dict:
     )
     return {
         "skills_match": skills_match,
+        "career_trajectory": trajectory,
         "semantic_relevance": semantic_relevance,
         "behavioral_signal": behavioral,
-        "career_trajectory": trajectory,
+        "production_evidence": production_evidence,
         "overall_score": overall,
         "highlights": list(skills)[:3] or ["profile analyzed"],
         "why_rank": f"[HEURISTIC FALLBACK] {candidate.get('name')} scored via keyword overlap ({len(skills)} skills matched).",
         "evidence": [f"Skills overlap: {', '.join(list(skills & key_skills)[:3]) or 'general fit'}"],
-        "borderline": 62 <= overall <= 88,
+        "borderline": 60 <= overall <= 88,
         "compute_path": "heuristic",
     }
 
@@ -392,29 +463,49 @@ def score_all_candidates(
 ) -> list[dict]:
     """
     Score all candidates with adaptive compute routing.
-    Primary path: fast-llm → reasoning-llm for uncertain borderline cases.
-    Heuristic fires only if Groq is completely unreachable after all retries.
-    Throttling/pacing is handled by llm_client._throttle() — no manual sleeps needed.
+    Fast-model calls run concurrently (the sliding-window rate limiter handles pacing
+    across threads). Borderline escalations to the reasoning model also run concurrently.
     """
-    results = []
-    for cand in candidates:
-        if not api_key:
-            scored = _fallback_score(cand, requirements)
-        else:
-            scored = score_candidate_fast(cand, requirements, api_key, fast_model, base_url)
+    from concurrent.futures import ThreadPoolExecutor
 
-        fast_score = scored.get("overall_score", 0)
+    if not candidates:
+        return []
 
-        if _should_escalate(scored, api_key):
-            logger.info(
-                f"[L4] Escalating {cand.get('name')} (score={fast_score}, "
-                f"sub_std={statistics.stdev([scored.get('skills_match',50), scored.get('semantic_relevance',50), scored.get('behavioral_signal',50), scored.get('career_trajectory',50)]):.1f}) "
-                f"→ reasoning model"
-            )
-            scored = score_candidate_deep(cand, requirements, fast_score, api_key, reasoning_model, base_url)
+    def _fast(cand: dict) -> tuple[dict, dict]:
+        scored = (
+            _fallback_score(cand, requirements)
+            if not api_key
+            else score_candidate_fast(cand, requirements, api_key, fast_model, base_url)
+        )
+        return cand, scored
 
-        cand_result = {**cand, **scored}
-        results.append(cand_result)
+    def _deep(pair: tuple[dict, dict]) -> dict:
+        cand, fast_scored = pair
+        fast_score = fast_scored.get("overall_score", 0)
+        sub_std = statistics.stdev([
+            fast_scored.get("skills_match", 50),
+            fast_scored.get("semantic_relevance", 50),
+            fast_scored.get("behavioral_signal", 50),
+            fast_scored.get("career_trajectory", 50),
+        ])
+        logger.info(
+            f"[L4] Escalating {cand.get('name')} (score={fast_score}, sub_std={sub_std:.1f}) "
+            f"→ reasoning model"
+        )
+        deep_scored = score_candidate_deep(cand, requirements, fast_score, api_key, reasoning_model, base_url)
+        return {**cand, **deep_scored}
+
+    # Phase 1: concurrent fast scoring — 8 workers is safe given 25 RPM limit
+    with ThreadPoolExecutor(max_workers=min(len(candidates), 8)) as ex:
+        fast_pairs: list[tuple[dict, dict]] = list(ex.map(_fast, candidates))
+
+    # Phase 2: route borderline candidates to deep reasoning (also concurrent)
+    need_deep = [(c, s) for c, s in fast_pairs if _should_escalate(s, api_key)]
+    results = [{**c, **s} for c, s in fast_pairs if not _should_escalate(s, api_key)]
+
+    if need_deep:
+        with ThreadPoolExecutor(max_workers=min(len(need_deep), 4)) as ex:
+            results.extend(ex.map(_deep, need_deep))
 
     fast = sum(1 for c in results if c.get("compute_path") == "fast-llm")
     deep = sum(1 for c in results if c.get("compute_path") == "reasoning-llm")
