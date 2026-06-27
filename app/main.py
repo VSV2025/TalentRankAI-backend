@@ -1,6 +1,7 @@
 """TalentRank AI — FastAPI backend entry point."""
 import logging
 import threading
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -31,6 +32,16 @@ def _prewarm_embeddings() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+
+    # Ensure all data directories exist (handles Render /tmp paths and local paths)
+    Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+    Path(settings.QDRANT_PATH).mkdir(parents=True, exist_ok=True)
+    db_url = settings.DATABASE_URL
+    if "sqlite:///" in db_url:
+        db_file = db_url.split("sqlite:///")[-1]
+        if db_file:
+            Path(db_file).parent.mkdir(parents=True, exist_ok=True)
+
     create_tables()
     logger.info("Database tables ready")
     if not settings.GROQ_API_KEY:

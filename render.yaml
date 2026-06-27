@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: talentrank-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATABASE_URL
+        value: sqlite:////tmp/talentrank/talentrank.db
+      - key: UPLOAD_DIR
+        value: /tmp/talentrank/uploads
+      - key: QDRANT_PATH
+        value: /tmp/talentrank/qdrant_data
+      - key: CORS_ORIGINS
+        value: https://talentrank-ai.vercel.app,http://localhost:5174,http://localhost:5173
+      - key: HF_HOME
+        value: /tmp/hf_cache
+      - key: SENTENCE_TRANSFORMERS_HOME
+        value: /tmp/st_cache
+      - key: GROQ_API_KEY
+        sync: false
+      - key: RECRUITER_PASSWORD
+        sync: false
