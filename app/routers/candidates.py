@@ -34,14 +34,6 @@ def list_candidates(db: Session = Depends(get_db)):
     return db.query(Candidate).order_by(Candidate.created_at.desc()).all()
 
 
-@router.get("/{candidate_id}", response_model=CandidateOut)
-def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
-    c = db.query(Candidate).filter(Candidate.id == candidate_id).first()
-    if not c:
-        raise HTTPException(status_code=404, detail="Candidate not found")
-    return c
-
-
 @router.get("/{candidate_id}/resume-file")
 def get_resume_file(candidate_id: int, db: Session = Depends(get_db)):
     """Serve the original uploaded resume file (PDF or DOCX) for in-browser viewing."""
@@ -71,6 +63,14 @@ def get_resume_file(candidate_id: int, db: Session = Depends(get_db)):
         filename=filename,
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
+
+
+@router.get("/{candidate_id}", response_model=CandidateOut)
+def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
+    c = db.query(Candidate).filter(Candidate.id == candidate_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    return c
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
