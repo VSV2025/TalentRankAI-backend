@@ -19,7 +19,12 @@ logger = logging.getLogger(__name__)
 
 def _prewarm_embeddings() -> None:
     """Load sentence-transformers + cross-encoder into memory at startup.
-    Runs in a background thread so the server stays responsive during model download."""
+    Skipped on Render/production (PREWARM_EMBEDDINGS=false) to stay within free-tier RAM.
+    Models load lazily on first pipeline run instead."""
+    import os
+    if os.getenv("PREWARM_EMBEDDINGS", "true").lower() == "false":
+        logger.info("Embedding pre-warm disabled (PREWARM_EMBEDDINGS=false) — lazy load on first use")
+        return
     try:
         from .services.embedding import _retriever
         _retriever._get_embed_model()
