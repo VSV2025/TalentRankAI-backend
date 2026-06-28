@@ -4,6 +4,7 @@ with cross-encoder/ms-marco reranker. Falls back to TF-IDF if
 sentence-transformers or qdrant-client are unavailable.
 """
 import logging
+import os
 import numpy as np
 from typing import Optional
 
@@ -40,6 +41,8 @@ class VectorRetriever:
         return self._embed_model
 
     def _get_cross_encoder(self):
+        if os.environ.get("DISABLE_CROSS_ENCODER", "").lower() in ("1", "true", "yes"):
+            return None
         if self._cross_encoder is None:
             try:
                 from sentence_transformers.cross_encoder import CrossEncoder
