@@ -98,13 +98,15 @@ def run_pipeline(
         funnel_retrieved = len(candidates)
         logger.info(f"Layer 2: small pool ({len(candidates)}) — skipping Qdrant, using cross-encoder directly")
 
-    # Cross-encoder rerank → top 30
+    _emit("L2 Rerank Start", 20)
+    # TF-IDF rerank → top 30 (cross-encoder disabled by default, opt-in via ENABLE_CROSS_ENCODER)
     reranked = emb_svc.rerank_top(
         query,
         [{"id": c["id"], "text": (c.get("resume_text") or "") + " " + " ".join(c.get("skills") or [])}
          for c in retrieved_candidates],
         top_k=30,
     )
+    _emit("L2 Rerank Done", 24)
     reranked_ids = {cid for cid, _ in reranked}
     shortlisted_candidates = [c for c in retrieved_candidates if c["id"] in reranked_ids]
     timings["layer2_retrieval"] = round(_timer() - t0, 2)
@@ -115,6 +117,7 @@ def run_pipeline(
     # ──────────────────────────────────────────────────────────────────
     # Layer 3: Graph Enrichment (PPR + skill breadth + inferred skills)
     # ──────────────────────────────────────────────────────────────────
+    _emit("L3 Start", 30)
     t0 = _timer()
     shortlisted_candidates = graph_svc.enrich_candidates(
         shortlisted_candidates, requirements
@@ -131,6 +134,7 @@ def run_pipeline(
     # ──────────────────────────────────────────────────────────────────
     # Layer 4: Cascade Scoring (fast model + routing to deep)
     # ──────────────────────────────────────────────────────────────────
+    _emit("L4 Start", 44)
     t0 = _timer()
     scored_candidates = scoring_svc.score_all_candidates(
         candidates=shortlisted_candidates,

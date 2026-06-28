@@ -86,4 +86,4 @@ app.include_router(hackathon.router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "TalentRank AI"}
+    return {"status": "ok", "service": "TalentRank AI", "v": "tfidf-default"}
