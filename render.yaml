@@ -22,8 +22,7 @@ services:
         value: /tmp/st_cache
       - key: PREWARM_EMBEDDINGS
         value: "false"
-      - key: DISABLE_CROSS_ENCODER
-        value: "true"
+
       - key: GROQ_API_KEY
         sync: false
       - key: RECRUITER_PASSWORD

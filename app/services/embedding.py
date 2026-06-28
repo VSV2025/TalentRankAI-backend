@@ -11,19 +11,6 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 EMBED_MODEL = "all-MiniLM-L6-v2"
-_MEM_THRESHOLD_MB = 400  # skip cross-encoder if < 400 MB available
-
-
-def _available_mb() -> float:
-    """Read MemAvailable from /proc/meminfo (Linux). Returns inf on other OS."""
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) / 1024
-    except Exception:
-        pass
-    return float("inf")
 CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 COLLECTION_NAME = "candidates"
 
@@ -54,11 +41,9 @@ class VectorRetriever:
         return self._embed_model
 
     def _get_cross_encoder(self):
-        if os.environ.get("DISABLE_CROSS_ENCODER", "").lower() in ("1", "true", "yes"):
-            return None
-        avail = _available_mb()
-        if avail < _MEM_THRESHOLD_MB:
-            logger.warning(f"Low memory ({avail:.0f}MB avail) — skip cross-encoder, using TF-IDF")
+        # Cross-encoder requires ~300MB RAM. Disabled by default to prevent OOM
+        # on memory-constrained deployments. Opt in with ENABLE_CROSS_ENCODER=true.
+        if os.environ.get("ENABLE_CROSS_ENCODER", "").lower() not in ("1", "true", "yes"):
             return None
         if self._cross_encoder is None:
             try:
