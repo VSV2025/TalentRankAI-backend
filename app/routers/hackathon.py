@@ -282,8 +282,16 @@ def finalize_upload(upload_id: str, total_chunks: int = Query(...)):
         for part_path in parts:
             with open(part_path, "rb") as part:
                 shutil.copyfileobj(part, out)
+            # Delete each chunk immediately after copying to cap peak disk usage at ~(1 chunk + assembled size)
+            try:
+                os.unlink(part_path)
+            except Exception:
+                pass
 
-    shutil.rmtree(upload_dir, ignore_errors=True)
+    try:
+        os.rmdir(upload_dir)  # should be empty now
+    except Exception:
+        shutil.rmtree(upload_dir, ignore_errors=True)
 
     line_count = 0
     with open(final_path, "r", encoding="utf-8") as f:
