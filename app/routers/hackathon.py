@@ -290,7 +290,7 @@ async def start_ranking(
                 break
         if not loaded:
             candidates = SAMPLE_CANDIDATES
-            logger.info("Challenge file not found — using embedded 10-candidate demo")
+            logger.info("Challenge file not found — using embedded 50-candidate demo")
     else:
         raise HTTPException(
             status_code=400,
