@@ -1,12 +1,16 @@
 """Hackathon submission API — offline 7-layer pipeline with no LLM calls."""
+import glob
 import io
 import json
 import logging
+import os
+import shutil
+import tempfile
 import threading
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from ..services.offline_pipeline import (
@@ -237,6 +241,68 @@ def _run_job_from_file(job_id: str, file_path: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Endpoints
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ── Chunked upload (avoids Render's 30-second request timeout for large files) ─
+
+@router.post("/upload-chunk")
+async def upload_chunk(
+    upload_id: str = Form(...),
+    chunk_index: int = Form(...),
+    chunk: UploadFile = File(...),
+):
+    """Receive one chunk of a large file upload. Safe to call repeatedly."""
+    upload_dir = f"/tmp/tr_upload_{upload_id}"
+    os.makedirs(upload_dir, exist_ok=True)
+    chunk_path = os.path.join(upload_dir, f"{chunk_index:06d}.part")
+    with open(chunk_path, "wb") as out:
+        while True:
+            data = await chunk.read(65536)
+            if not data:
+                break
+            out.write(data)
+    return {"received": True, "upload_id": upload_id, "chunk_index": chunk_index}
+
+
+@router.post("/finalize/{upload_id}")
+def finalize_upload(upload_id: str, total_chunks: int = Query(...)):
+    """Assemble all chunks and start the ranking pipeline."""
+    upload_dir = f"/tmp/tr_upload_{upload_id}"
+    if not os.path.isdir(upload_dir):
+        raise HTTPException(status_code=404, detail="Upload session not found.")
+
+    parts = sorted(glob.glob(os.path.join(upload_dir, "*.part")))
+    if len(parts) != total_chunks:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Expected {total_chunks} chunks, found {len(parts)}. Re-upload missing chunks.",
+        )
+
+    fd, final_path = tempfile.mkstemp(suffix=".jsonl", dir="/tmp")
+    with os.fdopen(fd, "wb") as out:
+        for part_path in parts:
+            with open(part_path, "rb") as part:
+                shutil.copyfileobj(part, out)
+
+    shutil.rmtree(upload_dir, ignore_errors=True)
+
+    line_count = 0
+    with open(final_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                line_count += 1
+
+    if line_count == 0:
+        try: os.unlink(final_path)
+        except Exception: pass
+        raise HTTPException(status_code=400, detail="No valid candidates found in uploaded file.")
+
+    job_id = str(uuid.uuid4())[:8]
+    _jobs[job_id] = _make_job()
+    _jobs[job_id]["progress"]["total"] = line_count
+    t = threading.Thread(target=_run_job_from_file, args=(job_id, final_path), daemon=True)
+    t.start()
+    return {"job_id": job_id, "total_candidates": line_count, "status": "running"}
+
 
 @router.get("/jd")
 def get_jd():
