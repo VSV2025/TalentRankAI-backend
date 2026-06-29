@@ -888,11 +888,12 @@ def generate_reasoning(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_pipeline(
-    candidates: list,
+    candidates,                         # list OR any iterable (generator OK)
     top_k: int = 2000,
     progress_cb: Optional[Callable] = None,
+    _total: int = None,                 # provide when candidates is a generator
 ) -> dict:
-    total = len(candidates)
+    total = _total if _total is not None else len(candidates)
 
     def _report(layer: str, layer_idx: int, processed: int = 0, message: str = ""):
         if progress_cb:
@@ -1038,13 +1039,22 @@ def run_pipeline(
 def run_pipeline_from_file(
     path: str, top_k: int = 2000, progress_cb: Optional[Callable] = None,
 ) -> dict:
-    candidates = []
+    """Memory-efficient: counts lines first, then streams one line at a time for L2.
+    Never loads the full dataset into RAM — peak usage is top_k (~2000) dicts."""
+    total = 0
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
-            line = line.strip()
-            if line:
-                candidates.append(json.loads(line))
-    return run_pipeline(candidates, top_k=top_k, progress_cb=progress_cb)
+            if line.strip():
+                total += 1
+
+    def _gen():
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    yield json.loads(line)
+
+    return run_pipeline(_gen(), top_k=top_k, progress_cb=progress_cb, _total=total)
 
 
 def results_to_csv(results: list) -> str:

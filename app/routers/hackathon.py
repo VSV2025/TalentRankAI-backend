@@ -209,6 +209,31 @@ def _run_job(job_id: str, candidates: list) -> None:
         job["error"] = str(exc)
 
 
+def _run_job_from_file(job_id: str, file_path: str) -> None:
+    """Memory-efficient variant for large uploads — streams line-by-line, never loads all into RAM."""
+    import os
+    from ..services.offline_pipeline import run_pipeline_from_file
+    job = _jobs[job_id]
+    job["status"] = "running"
+
+    def progress_cb(p: dict):
+        job["progress"] = p
+
+    try:
+        output = run_pipeline_from_file(file_path, top_k=2000, progress_cb=progress_cb)
+        job["status"] = "complete"
+        job["results"] = output
+    except Exception as exc:
+        logger.exception("Pipeline job %s (file) failed", job_id)
+        job["status"] = "error"
+        job["error"] = str(exc)
+    finally:
+        try:
+            os.unlink(file_path)
+        except Exception:
+            pass
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Endpoints
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,16 +261,40 @@ async def start_ranking(
     candidates: list = []
 
     if file is not None:
-        raw = await file.read()
-        text = raw.decode("utf-8")
-        # Support both JSONL and JSON array
-        if text.strip().startswith("["):
-            candidates = json.loads(text)
-        else:
-            for line in text.splitlines():
-                line = line.strip()
-                if line:
-                    candidates.append(json.loads(line))
+        import os, tempfile
+        # Stream upload directly to /tmp — never loads the whole file into RAM.
+        # This allows large files (100K JSONL, 465 MB) without OOM on the 512 MB container.
+        fd, tmp_path = tempfile.mkstemp(suffix=".jsonl", dir="/tmp")
+        try:
+            with os.fdopen(fd, "wb") as out:
+                while True:
+                    chunk = await file.read(65536)   # 64 KB chunks
+                    if not chunk:
+                        break
+                    out.write(chunk)
+        except Exception:
+            try: os.unlink(tmp_path)
+            except Exception: pass
+            raise
+
+        # Count candidates for progress reporting (fast sequential read)
+        line_count = 0
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    line_count += 1
+
+        if line_count == 0:
+            try: os.unlink(tmp_path)
+            except Exception: pass
+            raise HTTPException(status_code=400, detail="No valid candidates found in uploaded file.")
+
+        job_id = str(uuid.uuid4())[:8]
+        _jobs[job_id] = _make_job()
+        _jobs[job_id]["progress"]["total"] = line_count
+        t = threading.Thread(target=_run_job_from_file, args=(job_id, tmp_path), daemon=True)
+        t.start()
+        return {"job_id": job_id, "total_candidates": line_count, "status": "running"}
 
     elif sample_path:
         import os
